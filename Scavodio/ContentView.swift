@@ -64,10 +64,12 @@ struct ContentView: View {
     @State private var logText:          String = ""
     @State private var showLog:          Bool = false
     @State private var isDropTargeted:   Bool = false
-    @State private var isExtracting:     Bool = false
     @State private var isInstallingBrew: Bool = false
 
     // MARK: Derived
+
+    /// True while ffmpeg is running. Derived from service so it's always in sync.
+    private var isExtracting: Bool { service.currentProcess != nil }
 
     private var selectedTrack: AudioTrack? {
         audioTracks.first { $0.id == selectedTrackID }
@@ -78,6 +80,8 @@ struct ContentView: View {
         return track.codecName.lowercased() == "aac" ? ExportFormat.allCases : [.mka, .mp3]
     }
 
+    /// Auto-falls back to .mka when the current selection becomes unavailable
+    /// (e.g. user picks a non-AAC track after selecting .m4a). No `onChange` needed.
     private var formatBinding: Binding<ExportFormat> {
         Binding(
             get: { availableFormats.contains(selectedFormat) ? selectedFormat : .mka },
@@ -123,9 +127,7 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            Button {
-                installFFmpeg()
-            } label: {
+            Button { confirmAndInstallFFmpeg() } label: {
                 Label(isInstallingBrew ? "Installing\u{2026}" : "Install ffmpeg",
                       systemImage: "arrow.down.circle.fill")
             }
@@ -135,7 +137,8 @@ struct ContentView: View {
         .padding(10)
         .background(Color.orange.opacity(0.10))
         .cornerRadius(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .stroke(Color.orange.opacity(0.35), lineWidth: 1))
     }
 
     // MARK: - Drop zone
@@ -162,8 +165,7 @@ struct ContentView: View {
                         .font(.caption).foregroundColor(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 } else {
-                    Text("Drop a video file here")
-                        .foregroundColor(.secondary)
+                    Text("Drop a video file here").foregroundColor(.secondary)
                     Text(SupportedFormats.displayList)
                         .font(.caption).foregroundColor(.secondary)
                 }
@@ -202,6 +204,20 @@ struct ContentView: View {
                 .pickerStyle(.segmented).frame(maxWidth: 360).labelsHidden()
             }
             Spacer()
+
+            // Cancel button — visible only while extracting
+            if isExtracting {
+                Button(role: .destructive) {
+                    service.cancelExtraction()
+                    appStatus = .ready
+                    logText  += "\n[Cancelled]\n"
+                } label: {
+                    Label("Cancel", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
+
             Button { startExtraction() } label: {
                 Label("Extract Audio", systemImage: "waveform.badge.plus")
             }
@@ -237,13 +253,13 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .padding(6)
-                        .id("bottom")
+                        .id("logBottom")
                 }
                 .frame(height: 140)
                 .background(Color(NSColor.textBackgroundColor))
                 .cornerRadius(6)
                 .onChange(of: logText) { _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    withAnimation { proxy.scrollTo("logBottom", anchor: .bottom) }
                 }
             }
         } label: {
@@ -253,19 +269,34 @@ struct ContentView: View {
 
     // MARK: - Actions
 
-    private func installFFmpeg() {
+    private func confirmAndInstallFFmpeg() {
+        let alert = NSAlert()
+        alert.messageText     = "Install ffmpeg via Homebrew?"
+        alert.informativeText =
+            "This will download ~300 MB of software from brew.sh and install it on your Mac.\n\n" +
+            "Homebrew must already be installed at /opt/homebrew or /usr/local."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        startBrewInstall()
+    }
+
+    private func startBrewInstall() {
         isInstallingBrew = true
-        showLog = true
-        logText = ""
-        appStatus = .idle
+        showLog          = true
+        logText          = ""
+        appStatus        = .idle
+
         service.installFFmpeg(
-            logHandler: { line in self.logText += line },
-            completion: { success in
-                self.isInstallingBrew = false
-                self.appStatus = success
-                    ? .ready
-                    : .failed("Installation failed — see log")
-                if success { self.logText += "\nffmpeg installed successfully!\n" }
+            logHandler: { [self] line in logText += line },
+            completion: { [self] success in
+                isInstallingBrew = false
+                if success {
+                    appStatus  = .ready
+                    logText   += "\nffmpeg installed successfully!\n"
+                } else {
+                    appStatus = .failed("Installation failed — see log for details")
+                }
             }
         )
     }
@@ -276,7 +307,7 @@ struct ContentView: View {
         panel.canChooseDirectories    = false
         panel.canChooseFiles          = true
         panel.allowedContentTypes     = SupportedFormats.allowedContentTypes
-        panel.title = "Choose a video file"
+        panel.title                   = "Choose a video file"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         loadFile(url: url)
     }
@@ -287,13 +318,13 @@ struct ContentView: View {
         }) else { return false }
 
         _ = provider.loadObject(ofClass: URL.self) { url, _ in
-            guard let url = url else { return }
+            guard let url else { return }
             DispatchQueue.main.async {
                 if SupportedFormats.isSupported(url.pathExtension) {
                     self.loadFile(url: url)
                 } else {
                     self.appStatus = .failed(
-                        "Unsupported format: .\(url.pathExtension.lowercased()). " +
+                        "Unsupported format .\(url.pathExtension.lowercased()). " +
                         "Supported: \(SupportedFormats.displayList)"
                     )
                 }
@@ -326,11 +357,21 @@ struct ContentView: View {
     }
 
     private func startExtraction() {
-        guard let inputURL = selectedFileURL else { appStatus = .failed("No file selected"); return }
-        guard let track    = selectedTrack   else { appStatus = .failed("No track selected");  return }
+        guard let inputURL = selectedFileURL else {
+            appStatus = .failed("No file selected"); return
+        }
+        guard let track = selectedTrack else {
+            appStatus = .failed("No track selected"); return
+        }
 
         let format    = formatBinding.wrappedValue
-        let outputURL = makeOutputURL(input: inputURL, track: track, format: format)
+        let outputURL = OutputFileNamer.makeURL(
+            input:      inputURL,
+            audioIndex: track.audioIndex,
+            language:   track.language,
+            codecName:  track.codecName,
+            format:     format
+        )
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             let alert = NSAlert()
@@ -338,39 +379,30 @@ struct ContentView: View {
             alert.informativeText = "\(outputURL.lastPathComponent)\n\nOverwrite?"
             alert.addButton(withTitle: "Overwrite")
             alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { appStatus = .ready; return }
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                appStatus = .ready; return
+            }
         }
 
-        logText      = ""
-        isExtracting = true
-        appStatus    = .extracting
+        logText   = ""
+        appStatus = .extracting
 
         service.extractAudio(
-            from: inputURL, track: track, format: format, outputURL: outputURL,
-            logHandler: { line in self.logText += line },
-            completion: { result in
-                self.isExtracting = false
+            from:      inputURL,
+            track:     track,
+            format:    format,
+            outputURL: outputURL,
+            logHandler: { [self] line in logText += line },
+            completion: { [self] result in
                 switch result {
-                case .success:             self.appStatus = .success(outputURL)
-                case .failure(let error):  self.appStatus = .failed(error.localizedDescription)
+                case .success:
+                    appStatus = .success(outputURL)
+                case .failure(FFmpegError.extractionCancelled):
+                    break // appStatus already set to .ready by the Cancel button
+                case .failure(let error):
+                    appStatus = .failed(error.localizedDescription)
                 }
             }
         )
-    }
-
-    private func makeOutputURL(input: URL, track: AudioTrack, format: ExportFormat) -> URL {
-        let base = input.deletingPathExtension().lastPathComponent
-        var parts = [base, "audio\(track.audioIndex)"]
-        if let lang = track.language, !lang.isEmpty { parts.append(lang) }
-        parts.append(track.codecName)
-
-        var filename = parts
-            .joined(separator: "_")
-            .replacingOccurrences(of: "/",  with: "_")
-            .replacingOccurrences(of: "\0", with: "_")
-        if filename.isEmpty { filename = "output_audio" }
-        filename += ".\(format.fileExtension)"
-
-        return input.deletingLastPathComponent().appendingPathComponent(filename)
     }
 }

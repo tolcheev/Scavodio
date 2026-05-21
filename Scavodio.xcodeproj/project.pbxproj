@@ -11,6 +11,9 @@
 		A3B2C3D4E5F6A1B2C3D4E5F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B2C3D4E5F6A1B2C3D4E5F6 /* ContentView.swift */; };
 		B3B2C3D4E5F6A1B2C3D4E5F6 /* AudioTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B2C3D4E5F6A1B2C3D4E5F6 /* AudioTrack.swift */; };
 		C3B2C3D4E5F6A1B2C3D4E5F6 /* FFmpegService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B2C3D4E5F6A1B2C3D4E5F6 /* FFmpegService.swift */; };
+		D3C2B3D4E5F6A1B2C3D4E5F6 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3C1B3D4E5F6A1B2C3D4E5F6 /* ProcessRunner.swift */; };
+		E3C2B3D4E5F6A1B2C3D4E5F6 /* OutputFileNamer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C1B3D4E5F6A1B2C3D4E5F6 /* OutputFileNamer.swift */; };
+		F3C2B3D4E5F6A1B2C3D4E5F6 /* SupportedFormats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3C1B3D4E5F6A1B2C3D4E5F6 /* SupportedFormats.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +24,9 @@
 		C2B2C3D4E5F6A1B2C3D4E5F6 /* FFmpegService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FFmpegService.swift; sourceTree = "<group>"; };
 		D2B2C3D4E5F6A1B2C3D4E5F6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E2B2C3D4E5F6A1B2C3D4E5F6 /* Scavodio.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Scavodio.entitlements; sourceTree = "<group>"; };
+		D3C1B3D4E5F6A1B2C3D4E5F6 /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
+		E3C1B3D4E5F6A1B2C3D4E5F6 /* OutputFileNamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputFileNamer.swift; sourceTree = "<group>"; };
+		F3C1B3D4E5F6A1B2C3D4E5F6 /* SupportedFormats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFormats.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,6 +63,9 @@
 				A2B2C3D4E5F6A1B2C3D4E5F6 /* ContentView.swift */,
 				B2B2C3D4E5F6A1B2C3D4E5F6 /* AudioTrack.swift */,
 				C2B2C3D4E5F6A1B2C3D4E5F6 /* FFmpegService.swift */,
+				D3C1B3D4E5F6A1B2C3D4E5F6 /* ProcessRunner.swift */,
+				E3C1B3D4E5F6A1B2C3D4E5F6 /* OutputFileNamer.swift */,
+				F3C1B3D4E5F6A1B2C3D4E5F6 /* SupportedFormats.swift */,
 				D2B2C3D4E5F6A1B2C3D4E5F6 /* Info.plist */,
 				E2B2C3D4E5F6A1B2C3D4E5F6 /* Scavodio.entitlements */,
 			);
@@ -135,6 +144,9 @@
 				A3B2C3D4E5F6A1B2C3D4E5F6 /* ContentView.swift in Sources */,
 				B3B2C3D4E5F6A1B2C3D4E5F6 /* AudioTrack.swift in Sources */,
 				C3B2C3D4E5F6A1B2C3D4E5F6 /* FFmpegService.swift in Sources */,
+				D3C2B3D4E5F6A1B2C3D4E5F6 /* ProcessRunner.swift in Sources */,
+				E3C2B3D4E5F6A1B2C3D4E5F6 /* OutputFileNamer.swift in Sources */,
+				F3C2B3D4E5F6A1B2C3D4E5F6 /* SupportedFormats.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,7 +163,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				INFOPLIST_FILE = Scavodio/Info.plist;
@@ -180,7 +192,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Scavodio/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -190,7 +202,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.Scavodio;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize"; DEAD_CODE_STRIPPING = YES; STRIP_INSTALLED_PRODUCT = YES; STRIP_STYLE = "all-symbols"; SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_VERSION = 5;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -295,7 +307,7 @@
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize"; DEAD_CODE_STRIPPING = YES; STRIP_INSTALLED_PRODUCT = YES; STRIP_STYLE = "all-symbols"; SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;

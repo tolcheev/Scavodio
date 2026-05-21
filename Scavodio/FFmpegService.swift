@@ -9,6 +9,7 @@ enum FFmpegError: LocalizedError {
     case noAudioTracks
     case extractionFailed(String)
     case processLaunchFailed(String)
+    case extractionCancelled
 
     var errorDescription: String? {
         switch self {
@@ -21,9 +22,11 @@ enum FFmpegError: LocalizedError {
         case .noAudioTracks:
             return "No audio tracks found in this file."
         case .extractionFailed(let msg):
-            return "ffmpeg failed: \(msg)"
+            return "Extraction failed: \(msg)"
         case .processLaunchFailed(let msg):
             return "Process launch failed: \(msg)"
+        case .extractionCancelled:
+            return nil // Handled by the caller — not shown as an error
         }
     }
 }
@@ -50,27 +53,44 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 
 final class FFmpegService: ObservableObject {
 
-    @Published private(set) var ffmpegPath:  String?
-    @Published private(set) var ffprobePath: String?
+    // MARK: - Published state
 
-    private let searchDirs = ["/opt/homebrew/bin", "/usr/local/bin"]
+    @Published private(set) var ffmpegPath:     String?
+    @Published private(set) var ffprobePath:    String?
+    /// Non-nil while ffmpeg extraction is running. Used by UI for the Cancel button.
+    @Published private(set) var currentProcess: Process?
 
-    init() { recheckBinaries() }
+    // MARK: - Configuration
 
-    // MARK: Binary detection
+    /// Default Homebrew + system install paths.
+    static let defaultSearchDirs: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]
+
+    private let searchDirs: [String]
+
+    // MARK: - Init
+
+    /// - Parameter searchDirs: Directories to search for `ffmpeg`, `ffprobe`, and `brew`.
+    ///   Defaults to `FFmpegService.defaultSearchDirs`.
+    ///   Pass a custom value in tests to avoid touching the real filesystem.
+    init(searchDirs: [String] = FFmpegService.defaultSearchDirs) {
+        self.searchDirs = searchDirs
+        recheckBinaries()
+    }
+
+    // MARK: - Binary detection
 
     var isMissing: Bool { ffmpegPath == nil || ffprobePath == nil }
 
     var missingBinaries: [String] {
-        var m: [String] = []
-        if ffmpegPath  == nil { m.append("ffmpeg")  }
-        if ffprobePath == nil { m.append("ffprobe") }
-        return m
+        var missing: [String] = []
+        if ffmpegPath  == nil { missing.append("ffmpeg")  }
+        if ffprobePath == nil { missing.append("ffprobe") }
+        return missing
     }
 
     private func findBinary(_ name: String) -> String? {
         searchDirs
-            .map { "\($0)/\(name)" }
+            .map  { "\($0)/\(name)" }
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
@@ -79,26 +99,27 @@ final class FFmpegService: ObservableObject {
         ffprobePath = findBinary("ffprobe")
     }
 
-    // MARK: Install ffmpeg via brew
+    // MARK: - Install ffmpeg via brew (async)
 
     func installFFmpeg(
         logHandler: @escaping (String) -> Void,
         completion: @escaping (Bool) -> Void
     ) {
-        guard let brew = searchDirs.map({ "\($0)/brew" })
+        guard let brewPath = searchDirs
+            .map({ "\($0)/brew" })
             .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
         else {
             DispatchQueue.main.async {
                 logHandler("Homebrew not found.\n")
-                logHandler("Install from https://brew.sh first.\n")
+                logHandler("Install it first from https://brew.sh\n")
                 completion(false)
             }
             return
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: brew)
-        process.arguments = ["install", "ffmpeg"]
+        process.executableURL = URL(fileURLWithPath: brewPath)
+        process.arguments     = ["install", "ffmpeg"]
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -113,11 +134,11 @@ final class FFmpegService: ObservableObject {
         stdoutPipe.fileHandleForReading.readabilityHandler = readHandler
         stderrPipe.fileHandleForReading.readabilityHandler = readHandler
 
-        process.terminationHandler = { proc in
+        process.terminationHandler = { [weak self] proc in
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
-                self.recheckBinaries()
+                self?.recheckBinaries()
                 completion(proc.terminationStatus == 0)
             }
         }
@@ -132,54 +153,47 @@ final class FFmpegService: ObservableObject {
         }
     }
 
-    // MARK: Probe (blocking — call on background thread)
+    // MARK: - Probe (blocking — must be called on a background thread)
 
+    /// Runs `ffprobe` and returns detected audio tracks.
+    ///
+    /// - Parameter url: Path to the video file.
+    /// - Throws: `FFmpegError` on failure or timeout (30 s).
     func probeAudioTracks(at url: URL) throws -> [AudioTrack] {
-        guard let ffprobe = ffprobePath else {
+        guard let ffprobePath = ffprobePath else {
             throw FFmpegError.binaryNotFound("ffprobe")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffprobe)
-        process.arguments = [
-            "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "stream=index,codec_name,bit_rate:stream_tags=language,title",
-            "-of", "json",
-            url.path
-        ]
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError  = stderrPipe
+        let runner = ProcessRunner(
+            executableURL: URL(fileURLWithPath: ffprobePath),
+            arguments: [
+                "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=index,codec_name,bit_rate:stream_tags=language,title",
+                "-of", "json",
+                url.path,
+            ],
+            timeout: 30
+        )
 
         do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            throw FFmpegError.processLaunchFailed(error.localizedDescription)
+            let data = try runner.run()
+            return try parseProbeJSON(data)
+        } catch let failure as ProcessRunner.Failure {
+            throw FFmpegError.probeFailed(failure.localizedDescription)
         }
-
-        if process.terminationStatus != 0 {
-            let msg = String(
-                data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? "unknown error"
-            throw FFmpegError.probeFailed(msg.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-
-        return try parseProbeJSON(
-            stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        )
     }
 
-    private func parseProbeJSON(_ data: Data) throws -> [AudioTrack] {
+    // MARK: - Parse JSON
+    //
+    // `internal` (not private) so it is accessible in unit tests via @testable import.
+
+    func parseProbeJSON(_ data: Data) throws -> [AudioTrack] {
         guard
             let root    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let streams = root["streams"] as? [[String: Any]]
         else {
-            throw FFmpegError.jsonParseError("Could not parse ffprobe JSON")
+            throw FFmpegError.jsonParseError("Could not parse ffprobe JSON output")
         }
 
         var tracks: [AudioTrack] = []
@@ -198,8 +212,12 @@ final class FFmpegService: ObservableObject {
         return tracks
     }
 
-    // MARK: Extract (async, non-blocking)
+    // MARK: - Extract (async, non-blocking)
 
+    /// Starts ffmpeg extraction asynchronously.
+    ///
+    /// Sets `currentProcess` while running; cleared on completion or cancellation.
+    /// - Note: Must be called on the **main thread**.
     func extractAudio(
         from inputURL:  URL,
         track:          AudioTrack,
@@ -208,7 +226,7 @@ final class FFmpegService: ObservableObject {
         logHandler:     @escaping (String) -> Void,
         completion:     @escaping (Result<Void, Error>) -> Void
     ) {
-        guard let ffmpeg = ffmpegPath else {
+        guard let ffmpegPath = ffmpegPath else {
             completion(.failure(FFmpegError.binaryNotFound("ffmpeg")))
             return
         }
@@ -222,8 +240,8 @@ final class FFmpegService: ObservableObject {
         args.append(outputURL.path)
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = args
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments     = args
 
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
@@ -234,16 +252,37 @@ final class FFmpegService: ObservableObject {
             DispatchQueue.main.async { logHandler(text) }
         }
 
-        process.terminationHandler = { proc in
+        process.terminationHandler = { [weak self] proc in
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
-                proc.terminationStatus == 0
-                    ? completion(.success(()))
-                    : completion(.failure(FFmpegError.extractionFailed("Exit code \(proc.terminationStatus)")))
+                self?.currentProcess = nil
+                if proc.terminationStatus == 0 {
+                    completion(.success(()))
+                } else if proc.terminationReason == .uncaughtSignal {
+                    // Killed by cancelExtraction() — not an error from the user's perspective
+                    completion(.failure(FFmpegError.extractionCancelled))
+                } else {
+                    completion(.failure(
+                        FFmpegError.extractionFailed("Exit code \(proc.terminationStatus)")
+                    ))
+                }
             }
         }
 
-        do { try process.run() }
-        catch { completion(.failure(FFmpegError.processLaunchFailed(error.localizedDescription))) }
+        do {
+            try process.run()
+            currentProcess = process // Set on main thread — safe for @Published
+        } catch {
+            completion(.failure(FFmpegError.processLaunchFailed(error.localizedDescription)))
+        }
+    }
+
+    // MARK: - Cancel
+
+    /// Terminates the running ffmpeg process, if any.
+    /// The `extractAudio` completion will be called with `.failure(.extractionCancelled)`.
+    func cancelExtraction() {
+        currentProcess?.terminate()
+        // currentProcess will be cleared by terminationHandler
     }
 }
