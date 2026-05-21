@@ -14,17 +14,17 @@ enum FFmpegError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .binaryNotFound(let name):
-            return "\(name) not found. Install with:  brew install ffmpeg"
-        case .probeFailed(let msg):
-            return "ffprobe failed: \(msg)"
-        case .jsonParseError(let msg):
-            return "JSON parse error: \(msg)"
+            return "\(name) is not installed. Use the \"Install ffmpeg\" button to set it up."
+        case .probeFailed:
+            return "Couldn't read this file's audio tracks. It may be corrupt or access may be blocked."
+        case .jsonParseError:
+            return "Couldn't read audio track info — the file may be corrupt or in an unsupported format."
         case .noAudioTracks:
-            return "No audio tracks found in this file."
-        case .extractionFailed(let msg):
-            return "Extraction failed: \(msg)"
-        case .processLaunchFailed(let msg):
-            return "Process launch failed: \(msg)"
+            return "No audio tracks found. This file may be video-only."
+        case .extractionFailed:
+            return "Extraction failed — expand the log below for details."
+        case .processLaunchFailed:
+            return "Couldn't launch ffmpeg. Try reinstalling it: brew reinstall ffmpeg"
         case .extractionCancelled:
             return nil // Handled by the caller — not shown as an error
         }
@@ -172,6 +172,12 @@ final class FFmpegService: ObservableObject {
             throw FFmpegError.binaryNotFound("ffprobe")
         }
 
+        // Pre-check readability before spawning ffprobe — gives a cleaner error
+        // than a cryptic "exit 1" when macOS TCC blocks the file.
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            throw FFmpegError.probeFailed("Permission denied: \(url.lastPathComponent)")
+        }
+
         let runner = ProcessRunner(
             executableURL: URL(fileURLWithPath: ffprobePath),
             arguments: [
@@ -241,19 +247,21 @@ final class FFmpegService: ObservableObject {
 
         var args: [String] = ["-y", "-i", inputURL.path, "-map", "0:a:\(track.audioIndex)"]
         switch format {
-        case .mp3:  args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2", "-threads", "0"]
-        case .mka:  args += ["-c", "copy"]
-        case .aac:  args += ["-vn", "-c:a", "aac", "-b:a", "192k"]
+        // Encoding formats — -threads 0 lets ffmpeg use all available CPU cores.
+        case .mp3:  args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2",  "-threads", "0"]
+        case .aac:  args += ["-vn", "-c:a", "aac",        "-b:a", "192k", "-threads", "0"]
         case .m4a:
             // Copy-remux when source is already AAC; otherwise encode to AAC
             if track.codecName.lowercased() == "aac" {
                 args += ["-vn", "-c", "copy"]
             } else {
-                args += ["-vn", "-c:a", "aac", "-b:a", "192k"]
+                args += ["-vn", "-c:a", "aac", "-b:a", "192k", "-threads", "0"]
             }
-        case .ogg:  args += ["-vn", "-c:a", "libvorbis", "-q:a", "5"]
-        case .flac: args += ["-vn", "-c:a", "flac"]
-        case .opus: args += ["-vn", "-c:a", "libopus", "-b:a", "128k"]
+        case .ogg:  args += ["-vn", "-c:a", "libvorbis", "-q:a", "5",   "-threads", "0"]
+        case .flac: args += ["-vn", "-c:a", "flac",                      "-threads", "0"]
+        case .opus: args += ["-vn", "-c:a", "libopus",   "-b:a", "128k", "-threads", "0"]
+        // Lossless remux — copy is already instant, no threads needed
+        case .mka:  args += ["-c", "copy"]
         }
         args.append(outputURL.path)
 

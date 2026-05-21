@@ -15,11 +15,11 @@ enum AppStatus {
     var label: String {
         switch self {
         case .idle:             return "Drop a video file or click Choose Video\u{2026}"
-        case .probing:          return "Probing audio tracks\u{2026}"
-        case .ready:            return "Ready. Select a track and format, then extract."
-        case .extracting:       return "Extracting audio\u{2026}"
+        case .probing:          return "Reading audio tracks\u{2026}"
+        case .ready:            return "Ready \u{2014} select a track and format, then extract."
+        case .extracting:       return "Extracting\u{2026}"
         case .success(let url): return "Done: \(url.lastPathComponent)"
-        case .failed(let msg):  return "Error: \(msg)"
+        case .failed(let msg):  return msg   // red colour already signals error; no "Error:" prefix
         }
     }
 
@@ -38,15 +38,9 @@ enum AppStatus {
 struct TrackRow: View {
     let track: AudioTrack
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(track.displayName).font(.body)
-            HStack(spacing: 14) {
-                Label("Stream \(track.streamIndex)", systemImage: "number")
-                Label("Audio \(track.audioIndex)",   systemImage: "waveform")
-            }
-            .font(.caption).foregroundColor(.secondary)
-        }
-        .padding(.vertical, 2)
+        Text(track.displayName)
+            .font(.body)
+            .padding(.vertical, 3)
     }
 }
 
@@ -216,6 +210,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent).controlSize(.large)
             .disabled(isExtracting || service.isMissing)
+            .keyboardShortcut("r", modifiers: .command)
         }
     }
 
@@ -227,7 +222,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(appStatus.label)
                     .foregroundColor(appStatus.labelColor)
-                    .lineLimit(2)
+                    .lineLimit(5)
+                    .fixedSize(horizontal: false, vertical: true)
                 // Progress line: "5:23 at 18.8×  ·  est. 2 min left"
                 if case .extracting = appStatus, !progressInfo.isEmpty {
                     Text(progressInfo)
@@ -353,7 +349,7 @@ struct ContentView: View {
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.appStatus = .failed(error.localizedDescription)
+                    self.appStatus = .failed(self.makeProbeError(error))
                 }
             }
         }
@@ -448,16 +444,74 @@ struct ContentView: View {
         return speedStr.isEmpty ? timeStr : "\(timeStr)  \u{00B7}  \(speedStr)"
     }
 
-    /// Converts a raw extraction error into a human-readable message.
-    /// Detects macOS permission blocks (TCC) and returns actionable advice.
+    // MARK: - Friendly error helpers
+
+    /// Translates probe (ffprobe) errors into user-readable messages.
+    private func makeProbeError(_ error: Error) -> String {
+        switch error {
+        case FFmpegError.probeFailed(let msg) where msg.lowercased().contains("permission"):
+            return "macOS blocked access to this file.\n" +
+                   "Move it to Desktop or Downloads, or grant Full Disk Access:\n" +
+                   "System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access \u{2192} add ffmpeg."
+        case FFmpegError.probeFailed:
+            return "Couldn't read this file. It may be corrupt, incomplete, or in an unsupported format."
+        case FFmpegError.noAudioTracks:
+            return "No audio tracks found. This file may be video-only."
+        case FFmpegError.binaryNotFound:
+            return "ffprobe is not installed. Use the \"Install ffmpeg\" button above."
+        default:
+            return error.localizedDescription
+        }
+    }
+
+    /// Translates extraction (ffmpeg) errors into user-readable messages.
+    /// Checks the ffmpeg log for known patterns before falling back to the raw error.
     private func makeUserFriendlyError(_ error: Error, log: String) -> String {
+        // ffmpeg couldn't even start — no log to parse
+        if case FFmpegError.processLaunchFailed = error {
+            return "Couldn't launch ffmpeg. Try reinstalling it:\nbrew reinstall ffmpeg"
+        }
+
         let logLower = log.lowercased()
-        let permissionHints = ["permission denied", "operation not permitted", "access denied"]
-        if permissionHints.contains(where: { logLower.contains($0) }) {
+
+        // macOS TCC / sandbox blocked access
+        if ["permission denied", "operation not permitted", "access denied"]
+            .contains(where: { logLower.contains($0) }) {
             return "macOS blocked file access.\n" +
                    "Move the video to Desktop or Downloads, or grant Full Disk Access:\n" +
                    "System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access \u{2192} add ffmpeg."
         }
+
+        // Encoder not available in this ffmpeg build (e.g. libvorbis, libopus missing)
+        if logLower.contains("unknown encoder") || logLower.contains("encoder not found") ||
+           (logLower.contains("codec") && logLower.contains("not found")) {
+            return "\(selectedFormat.rawValue) encoder not available in your ffmpeg build.\n" +
+                   "Reinstall with full codec support: brew reinstall ffmpeg"
+        }
+
+        // Disk full
+        if logLower.contains("no space left") || logLower.contains("disk full") {
+            return "Not enough disk space to write the output file.\nFree up space and try again."
+        }
+
+        // Source file disappeared between probe and extraction
+        if logLower.contains("no such file or directory") {
+            return "Source file not found. It may have been moved or deleted."
+        }
+
+        // Corrupt / truncated input
+        if logLower.contains("invalid data found") || logLower.contains("moov atom not found") ||
+           logLower.contains("end of file") || logLower.contains("corrupt") {
+            return "This file appears to be corrupt or incomplete and couldn't be processed."
+        }
+
+        // Output write failure (permissions on destination folder, ejected drive, etc.)
+        if logLower.contains("broken pipe") || logLower.contains("write error") ||
+           (logLower.contains("i/o error") && logLower.contains("output")) {
+            return "Couldn't write the output file.\nCheck available disk space and destination folder permissions."
+        }
+
+        // Fallback: surface the last meaningful line from ffmpeg stderr
         return lastFFmpegError(in: log) ?? error.localizedDescription
     }
 
@@ -469,8 +523,7 @@ struct ContentView: View {
             .components(separatedBy: "\n")
             .filter { line in
                 let l = line.lowercased()
-                return keywords.contains(where: { l.contains($0) })
-                    && line.count > 10
+                return keywords.contains(where: { l.contains($0) }) && line.count > 10
             }
             .last?
             .trimmingCharacters(in: .whitespaces)
