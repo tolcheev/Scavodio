@@ -59,7 +59,7 @@ struct ContentView: View {
     @State private var selectedFileURL:  URL?
     @State private var audioTracks:      [AudioTrack] = []
     @State private var selectedTrackID:  AudioTrack.ID?
-    @State private var selectedFormat:   ExportFormat = .mka
+    @State private var selectedFormat:   ExportFormat = .mp3
     @State private var appStatus:        AppStatus = .idle
     @State private var logText:          String = ""
     @State private var showLog:          Bool = false
@@ -76,18 +76,10 @@ struct ContentView: View {
         audioTracks.first { $0.id == selectedTrackID }
     }
 
-    private var availableFormats: [ExportFormat] {
-        guard let track = selectedTrack else { return [.mka, .mp3] }
-        return track.codecName.lowercased() == "aac" ? ExportFormat.allCases : [.mka, .mp3]
-    }
+    private var availableFormats: [ExportFormat] { ExportFormat.allCases }
 
-    /// Auto-falls back to .mka when the current selection becomes unavailable
-    /// (e.g. user picks a non-AAC track after selecting .m4a). No `onChange` needed.
     private var formatBinding: Binding<ExportFormat> {
-        Binding(
-            get: { availableFormats.contains(selectedFormat) ? selectedFormat : .mka },
-            set: { selectedFormat = $0 }
-        )
+        Binding(get: { selectedFormat }, set: { selectedFormat = $0 })
     }
 
     // MARK: Body
@@ -199,10 +191,10 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Export Format").font(.subheadline).foregroundColor(.secondary)
-                Picker("", selection: formatBinding) {
+                Picker("Format", selection: formatBinding) {
                     ForEach(availableFormats) { fmt in Text(fmt.rawValue).tag(fmt) }
                 }
-                .pickerStyle(.segmented).frame(maxWidth: 360).labelsHidden()
+                .pickerStyle(.menu).frame(minWidth: 120).labelsHidden()
             }
             Spacer()
 
@@ -418,10 +410,7 @@ struct ContentView: View {
                 case .failure(let error):
                     // Auto-expand log so user sees what went wrong
                     showLog = true
-                    // Try to show the last meaningful ffmpeg error line
-                    let hint = lastFFmpegError(in: logText)
-                    let msg  = hint ?? error.localizedDescription
-                    appStatus = .failed(msg)
+                    appStatus = .failed(makeUserFriendlyError(error, log: logText))
                 }
             }
         )
@@ -457,6 +446,19 @@ struct ContentView: View {
 
         guard !timeStr.isEmpty else { return nil }
         return speedStr.isEmpty ? timeStr : "\(timeStr)  \u{00B7}  \(speedStr)"
+    }
+
+    /// Converts a raw extraction error into a human-readable message.
+    /// Detects macOS permission blocks (TCC) and returns actionable advice.
+    private func makeUserFriendlyError(_ error: Error, log: String) -> String {
+        let logLower = log.lowercased()
+        let permissionHints = ["permission denied", "operation not permitted", "access denied"]
+        if permissionHints.contains(where: { logLower.contains($0) }) {
+            return "macOS blocked file access.\n" +
+                   "Move the video to Desktop or Downloads, or grant Full Disk Access:\n" +
+                   "System Settings \u{2192} Privacy & Security \u{2192} Full Disk Access \u{2192} add ffmpeg."
+        }
+        return lastFFmpegError(in: log) ?? error.localizedDescription
     }
 
     /// Returns the last line in ffmpeg output that looks like an actual error.

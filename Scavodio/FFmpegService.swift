@@ -34,17 +34,25 @@ enum FFmpegError: LocalizedError {
 // MARK: - Export format
 
 enum ExportFormat: String, CaseIterable, Identifiable {
-    case mka = "MKA (copy)"
-    case mp3 = "MP3"
-    case m4a = "M4A (AAC copy)"
+    case mp3  = "MP3"
+    case mka  = "MKA (copy)"
+    case aac  = "AAC"
+    case m4a  = "M4A"
+    case ogg  = "OGG"
+    case flac = "FLAC"
+    case opus = "Opus"
 
     var id: String { rawValue }
 
     var fileExtension: String {
         switch self {
-        case .mka: return "mka"
-        case .mp3: return "mp3"
-        case .m4a: return "m4a"
+        case .mp3:  return "mp3"
+        case .mka:  return "mka"
+        case .aac:  return "aac"
+        case .m4a:  return "m4a"
+        case .ogg:  return "ogg"
+        case .flac: return "flac"
+        case .opus: return "opus"
         }
     }
 }
@@ -233,9 +241,19 @@ final class FFmpegService: ObservableObject {
 
         var args: [String] = ["-y", "-i", inputURL.path, "-map", "0:a:\(track.audioIndex)"]
         switch format {
-        case .mka: args += ["-c", "copy"]
-        case .mp3: args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2", "-threads", "0"]
-        case .m4a: args += ["-vn", "-c", "copy"]
+        case .mp3:  args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2", "-threads", "0"]
+        case .mka:  args += ["-c", "copy"]
+        case .aac:  args += ["-vn", "-c:a", "aac", "-b:a", "192k"]
+        case .m4a:
+            // Copy-remux when source is already AAC; otherwise encode to AAC
+            if track.codecName.lowercased() == "aac" {
+                args += ["-vn", "-c", "copy"]
+            } else {
+                args += ["-vn", "-c:a", "aac", "-b:a", "192k"]
+            }
+        case .ogg:  args += ["-vn", "-c:a", "libvorbis", "-q:a", "5"]
+        case .flac: args += ["-vn", "-c:a", "flac"]
+        case .opus: args += ["-vn", "-c:a", "libopus", "-b:a", "128k"]
         }
         args.append(outputURL.path)
 
