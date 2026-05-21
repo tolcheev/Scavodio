@@ -65,6 +65,7 @@ struct ContentView: View {
     @State private var showLog:          Bool = false
     @State private var isDropTargeted:   Bool = false
     @State private var isInstallingBrew: Bool = false
+    @State private var progressInfo:     String = ""  // "5:23 at 18.8×"
 
     // MARK: Derived
 
@@ -231,7 +232,17 @@ struct ContentView: View {
     private var statusBar: some View {
         HStack(spacing: 8) {
             if case .extracting = appStatus { ProgressView().scaleEffect(0.7) }
-            Text(appStatus.label).foregroundColor(appStatus.labelColor).lineLimit(2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appStatus.label)
+                    .foregroundColor(appStatus.labelColor)
+                    .lineLimit(2)
+                // Progress line: "5:23 at 18.8×  ·  est. 2 min left"
+                if case .extracting = appStatus, !progressInfo.isEmpty {
+                    Text(progressInfo)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
             Spacer()
             if case .success(let url) = appStatus {
                 Button("Show in Finder") {
@@ -384,25 +395,82 @@ struct ContentView: View {
             }
         }
 
-        logText   = ""
-        appStatus = .extracting
+        logText      = ""
+        progressInfo = ""
+        appStatus    = .extracting
 
         service.extractAudio(
             from:      inputURL,
             track:     track,
             format:    format,
             outputURL: outputURL,
-            logHandler: { [self] line in logText += line },
+            logHandler: { [self] line in
+                logText += line
+                if let p = parseFFmpegProgress(line) { progressInfo = p }
+            },
             completion: { [self] result in
+                progressInfo = ""
                 switch result {
                 case .success:
                     appStatus = .success(outputURL)
                 case .failure(FFmpegError.extractionCancelled):
-                    break // appStatus already set to .ready by the Cancel button
+                    break
                 case .failure(let error):
-                    appStatus = .failed(error.localizedDescription)
+                    // Auto-expand log so user sees what went wrong
+                    showLog = true
+                    // Try to show the last meaningful ffmpeg error line
+                    let hint = lastFFmpegError(in: logText)
+                    let msg  = hint ?? error.localizedDescription
+                    appStatus = .failed(msg)
                 }
             }
         )
+    }
+
+    // MARK: - Progress / error parsing
+
+    /// Parses ffmpeg stderr lines like:
+    /// `size=   2048kB time=00:05:23.10 bitrate= 51.7kbits/s speed=18.8x`
+    /// Returns a human-readable string like "5m 23s  ·  18.8×"
+    private func parseFFmpegProgress(_ line: String) -> String? {
+        guard line.contains("time="), line.contains("speed=") else { return nil }
+
+        var timeStr = ""
+        if let r = line.range(of: #"time=(\d{2}):(\d{2}):(\d{2})"#,
+                               options: .regularExpression) {
+            let raw = String(line[r]).dropFirst("time=".count)
+            let parts = raw.split(separator: ":")
+            if parts.count == 3,
+               let h = Int(parts[0]), let m = Int(parts[1]), let s = Int(parts[2]) {
+                timeStr = h > 0
+                    ? "\(h)h \(m)m \(s)s"
+                    : (m > 0 ? "\(m)m \(s)s" : "\(s)s")
+            }
+        }
+
+        var speedStr = ""
+        if let r = line.range(of: #"speed=\s*[\d.]+"#, options: .regularExpression) {
+            speedStr = String(line[r])
+                .replacingOccurrences(of: "speed=", with: "")
+                .trimmingCharacters(in: .whitespaces) + "\u{00D7}"
+        }
+
+        guard !timeStr.isEmpty else { return nil }
+        return speedStr.isEmpty ? timeStr : "\(timeStr)  \u{00B7}  \(speedStr)"
+    }
+
+    /// Returns the last line in ffmpeg output that looks like an actual error.
+    private func lastFFmpegError(in log: String) -> String? {
+        let keywords = ["error", "invalid", "no such file", "permission denied",
+                        "unknown encoder", "failed", "could not", "unable to"]
+        return log
+            .components(separatedBy: "\n")
+            .filter { line in
+                let l = line.lowercased()
+                return keywords.contains(where: { l.contains($0) })
+                    && line.count > 10
+            }
+            .last?
+            .trimmingCharacters(in: .whitespaces)
     }
 }

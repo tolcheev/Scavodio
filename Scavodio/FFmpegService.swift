@@ -234,7 +234,7 @@ final class FFmpegService: ObservableObject {
         var args: [String] = ["-y", "-i", inputURL.path, "-map", "0:a:\(track.audioIndex)"]
         switch format {
         case .mka: args += ["-c", "copy"]
-        case .mp3: args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2"]
+        case .mp3: args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2", "-threads", "0"]
         case .m4a: args += ["-vn", "-c", "copy"]
         }
         args.append(outputURL.path)
