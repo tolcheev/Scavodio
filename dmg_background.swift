@@ -1,7 +1,8 @@
 import AppKit
 import CoreGraphics
 
-let W = 660, H = 380
+// Window bounds in AppleScript: {100, 100, 760, 560} → content 660 × 460
+let W = 660, H = 460
 let fw = CGFloat(W), fh = CGFloat(H)
 
 let bmp = NSBitmapImageRep(
@@ -12,65 +13,75 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bmp)
 let ctx = NSGraphicsContext.current!.cgContext
 let cs = CGColorSpaceCreateDeviceRGB()
 
-// ── Clean light background ─────────────────────────────────────────────────
-// Top: #EEEEF0, Bottom: #E6E6E9
-let bgColors: [CGFloat] = [
-    0.935, 0.935, 0.941, 1.0,
-    0.902, 0.902, 0.914, 1.0,
-]
+// ── Background ─────────────────────────────────────────────────────────────
+let bgColors: [CGFloat] = [0.937, 0.937, 0.945, 1.0,  0.906, 0.906, 0.918, 1.0]
 let bg = CGGradient(colorSpace: cs, colorComponents: bgColors, locations: [0,1], count: 2)!
 ctx.drawLinearGradient(bg, start: CGPoint(x: fw/2, y: fh), end: CGPoint(x: fw/2, y: 0), options: [])
 
-// ── Subtle vignette (darker edges) ────────────────────────────────────────
-let vigColors: [CGFloat] = [0,0,0,0.0,  0,0,0,0.06]
+// Subtle edge vignette
+let vigColors: [CGFloat] = [0,0,0,0.0, 0,0,0,0.055]
 let vig = CGGradient(colorSpace: cs, colorComponents: vigColors, locations: [0,1], count: 2)!
 ctx.drawRadialGradient(vig,
     startCenter: CGPoint(x: fw/2, y: fh/2), startRadius: 0,
-    endCenter:   CGPoint(x: fw/2, y: fh/2), endRadius: fw * 0.72,
+    endCenter:   CGPoint(x: fw/2, y: fh/2), endRadius: fw * 0.76,
     options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
 
-// ── Dashed arrow ──────────────────────────────────────────────────────────
-// Arrow runs from x=240 to x=420, centred at y=185
-let startX: CGFloat = 248
-let endX:   CGFloat = 412
-let midY:   CGFloat = 183
-let headW:  CGFloat = 18
-let headH:  CGFloat = 24
-let shaftY: CGFloat = 5   // half shaft height
+// ── Dashed arrow (app at x=175, apps at x=485, icon centre y=250 from top → y=210 from bottom) ──
+let startX: CGFloat = 252, endX: CGFloat = 410, midY: CGFloat = 212
+let headW:  CGFloat = 18,  headH: CGFloat = 22, shaftY: CGFloat = 4.5
 
-// Build arrow outline path
 let arrowPath = CGMutablePath()
-// Shaft top
-arrowPath.move(to:    CGPoint(x: startX,          y: midY + shaftY))
-arrowPath.addLine(to: CGPoint(x: endX - headW,    y: midY + shaftY))
-// Head top-wing
-arrowPath.addLine(to: CGPoint(x: endX - headW,    y: midY + headH/2))
-// Tip
-arrowPath.addLine(to: CGPoint(x: endX,            y: midY))
-// Head bottom-wing
-arrowPath.addLine(to: CGPoint(x: endX - headW,    y: midY - headH/2))
-// Shaft bottom
-arrowPath.addLine(to: CGPoint(x: endX - headW,    y: midY - shaftY))
-arrowPath.addLine(to: CGPoint(x: startX,          y: midY - shaftY))
+arrowPath.move(to:    CGPoint(x: startX,         y: midY + shaftY))
+arrowPath.addLine(to: CGPoint(x: endX - headW,   y: midY + shaftY))
+arrowPath.addLine(to: CGPoint(x: endX - headW,   y: midY + headH/2))
+arrowPath.addLine(to: CGPoint(x: endX,           y: midY))
+arrowPath.addLine(to: CGPoint(x: endX - headW,   y: midY - headH/2))
+arrowPath.addLine(to: CGPoint(x: endX - headW,   y: midY - shaftY))
+arrowPath.addLine(to: CGPoint(x: startX,         y: midY - shaftY))
 arrowPath.closeSubpath()
 
-// Draw as dashed stroke only (hollow)
 ctx.addPath(arrowPath)
-ctx.setStrokeColor(CGColor(red: 0.55, green: 0.55, blue: 0.60, alpha: 0.70))
-ctx.setFillColor(CGColor(red: 0.55, green: 0.55, blue: 0.60, alpha: 0.12))
+ctx.setFillColor(CGColor(red: 0.55, green: 0.55, blue: 0.60, alpha: 0.13))
+ctx.setStrokeColor(CGColor(red: 0.50, green: 0.50, blue: 0.56, alpha: 0.65))
 ctx.setLineWidth(1.5)
 ctx.setLineDash(phase: 0, lengths: [6, 3])
 ctx.drawPath(using: .fillStroke)
 ctx.setLineDash(phase: 0, lengths: [])
 
-// ── Minimal hint at the very bottom ───────────────────────────────────────
-let paraStyle = NSMutableParagraphStyle(); paraStyle.alignment = .center
-NSAttributedString(string: "Drag to Applications, then double-click \"Open Privacy Settings\" if blocked", attributes: [
-    .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-    .foregroundColor: NSColor(white: 0, alpha: 0.28),
-    .paragraphStyle: paraStyle,
-]).draw(in: CGRect(x: 40, y: 14, width: fw - 80, height: 16))
+// ── Divider between install area and help area ─────────────────────────────
+// In CG coords (bottom=0): divider at y=148 from bottom = y=312 from top
+let divY: CGFloat = 148
+ctx.setStrokeColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.08))
+ctx.setLineWidth(1)
+ctx.move(to: CGPoint(x: 48, y: divY)); ctx.addLine(to: CGPoint(x: fw - 48, y: divY))
+ctx.strokePath()
+
+// ── "If blocked by macOS:" label ──────────────────────────────────────────
+// y=148 divider → label just below it, so in CG: y=125..140 range
+let paraC = NSMutableParagraphStyle(); paraC.alignment = .center
+let paraL = NSMutableParagraphStyle(); paraL.alignment = .left
+
+// Centred subtitle above the shortcut icon
+NSAttributedString(string: "If blocked by macOS / Если заблокировано:", attributes: [
+    .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+    .foregroundColor: NSColor(white: 0, alpha: 0.38),
+    .paragraphStyle: paraC,
+]).draw(in: CGRect(x: 0, y: 116, width: fw, height: 18))
+
+// Arrow down pointing to the icon
+NSAttributedString(string: "↓", attributes: [
+    .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+    .foregroundColor: NSColor(white: 0, alpha: 0.25),
+    .paragraphStyle: paraC,
+]).draw(in: CGRect(x: 0, y: 96, width: fw, height: 18))
+
+// Fine print below the icon (very bottom)
+NSAttributedString(string: "Double-click to open Privacy & Security — then click \"Open Anyway\"  ·  Дважды кликни — нажми «Открыть всё равно»", attributes: [
+    .font: NSFont.systemFont(ofSize: 9, weight: .regular),
+    .foregroundColor: NSColor(white: 0, alpha: 0.25),
+    .paragraphStyle: paraC,
+]).draw(in: CGRect(x: 20, y: 12, width: fw - 40, height: 14))
 
 let png = bmp.representation(using: .png, properties: [:])!
-try! png.write(to: URL(fileURLWithPath: "/tmp/dmg_bg_v7.png"))
-print("done")
+try! png.write(to: URL(fileURLWithPath: "/tmp/dmg_bg_v8.png"))
+print("done → 660×460")
