@@ -60,8 +60,8 @@ struct ContentView: View {
     @State private var isDropTargeted:   Bool = false
     @State private var isInstallingBrew: Bool = false
     @State private var progressInfo:     String = ""  // "5:23 at 18.8×"
-    @State private var splitEnabled:     Bool = false
-    @State private var splitMinutes:     Int  = 60
+    @State private var splitEnabled:      Bool         = false
+    @State private var splitDuration:    SplitDuration = .twoHours
 
     // MARK: Derived
 
@@ -183,11 +183,28 @@ struct ContentView: View {
 
     // MARK: - Controls
 
-    /// How many parts would be created given the selected track and split settings.
-    private var splitPartCount: Int? {
-        guard splitEnabled, splitMinutes > 0,
+    /// Returns "→ N parts: Xh + Xh + Ym" preview string, or nil if split is off/invalid.
+    private var splitPreview: String? {
+        guard splitEnabled,
               let dur = selectedTrack?.duration, dur > 0 else { return nil }
-        return max(1, Int(ceil(dur / Double(splitMinutes * 60))))
+        let chunkSec = splitDuration.seconds
+        let n = max(1, Int(ceil(dur / chunkSec)))
+        guard n > 1 else { return nil }
+
+        func fmt(_ sec: TimeInterval) -> String {
+            let t = Int(sec); let h = t/3600; let m = (t%3600)/60
+            if h > 0 && m > 0 { return "\(h)h \(m)m" }
+            return h > 0 ? "\(h)h" : "\(m)m"
+        }
+        let chunks = (0..<min(n, 4)).map { i -> String in
+            let start = Double(i) * chunkSec
+            let end   = min(start + chunkSec, dur)
+            return fmt(end - start)
+        }
+        let breakdown = n <= 4
+            ? chunks.joined(separator: " + ")
+            : chunks.prefix(3).joined(separator: " + ") + " + \u{2026}"
+        return "\u{2192} \(n) parts: \(breakdown)"
     }
 
     private var controlsSection: some View {
@@ -207,15 +224,19 @@ struct ContentView: View {
                 Text("Split").font(.subheadline).foregroundColor(.secondary)
                 HStack(spacing: 6) {
                     Toggle("", isOn: $splitEnabled).labelsHidden()
-                    TextField("", value: $splitMinutes, format: .number)
-                        .frame(width: 42)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(!splitEnabled)
-                    Text("min").foregroundColor(splitEnabled ? .primary : .secondary)
-                    if let n = splitPartCount {
-                        Text("→ \(n) \(n == 1 ? "part" : "parts")")
-                            .font(.caption).foregroundColor(.secondary)
+                    Picker("", selection: $splitDuration) {
+                        ForEach(SplitDuration.allCases) { d in
+                            Text(d.label).tag(d)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .frame(width: 76)
+                    .labelsHidden()
+                    .disabled(!splitEnabled)
+                }
+                if let preview = splitPreview {
+                    Text(preview)
+                        .font(.caption).foregroundColor(.secondary)
                 }
             }
 
@@ -422,8 +443,9 @@ struct ContentView: View {
         appStatus    = .extracting
 
         // ── Split mode ──────────────────────────────────────────────────────
-        if splitEnabled, splitMinutes > 0, let n = splitPartCount, n > 1 {
-            let partDur = Double(splitMinutes * 60)
+        if splitEnabled, let preview = splitPreview {
+            let _ = preview  // already validated: n > 1
+            let partDur = splitDuration.seconds
             appStatus = .extracting   // will be updated per-part via progressInfo
 
             service.extractAudioParts(
