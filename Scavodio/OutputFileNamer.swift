@@ -29,11 +29,12 @@ enum OutputFileNamer {
     ///   - codecName:  Codec name from ffprobe (e.g. "aac", "ac3").
     ///   - format:     Export format that determines the file extension.
     static func makeURL(
-        input:      URL,
-        audioIndex: Int,
-        language:   String?,
-        codecName:  String,
-        format:     ExportFormat
+        input:           URL,
+        outputDirectory: URL? = nil,
+        audioIndex:      Int,
+        language:        String?,
+        codecName:       String,
+        format:          ExportFormat
     ) -> URL {
         let base = sanitize(input.deletingPathExtension().lastPathComponent)
 
@@ -45,7 +46,8 @@ enum OutputFileNamer {
         let stem     = parts.joined(separator: "_")
         let filename = truncated(stem: stem, ext: format.fileExtension)
 
-        return input.deletingLastPathComponent().appendingPathComponent(filename)
+        let dir = outputDirectory ?? input.deletingLastPathComponent()
+        return dir.appendingPathComponent(filename)
     }
 
     // MARK: - Helpers

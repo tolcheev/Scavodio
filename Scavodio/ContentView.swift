@@ -60,8 +60,10 @@ struct ContentView: View {
     @State private var isDropTargeted:   Bool = false
     @State private var isInstallingBrew: Bool = false
     @State private var progressInfo:     String = ""  // "5:23 at 18.8×"
-    @State private var splitEnabled:      Bool         = false
+    @State private var splitEnabled:     Bool          = false
     @State private var splitDuration:    SplitDuration = .twoHours
+    /// nil = save next to source file (default)
+    @State private var outputDirectory:  URL?          = nil
 
     // MARK: Derived
 
@@ -86,6 +88,7 @@ struct ContentView: View {
             dropZone
             if !audioTracks.isEmpty { tracksSection }
             if selectedTrack != nil { controlsSection }
+            if selectedTrack != nil { outputDirectoryRow }
             Divider()
             statusBar
             logSection
@@ -264,6 +267,42 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Output directory row
+
+    private var outputDirectoryRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder").foregroundColor(.secondary)
+            Text("Save to:").font(.subheadline).foregroundColor(.secondary)
+
+            if let dir = outputDirectory {
+                Text(dir.path)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundColor(.primary)
+                Button {
+                    outputDirectory = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Reset to same folder as source video")
+            } else {
+                Text(selectedFileURL?.deletingLastPathComponent().path ?? "Same folder as video")
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Button("Choose\u{2026}") { chooseOutputDirectory() }
+                .buttonStyle(.bordered)
+        }
+    }
+
     // MARK: - Status bar
 
     private var statusBar: some View {
@@ -355,6 +394,21 @@ struct ContentView: View {
         )
     }
 
+    private func chooseOutputDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles          = false
+        panel.canChooseDirectories    = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories    = true
+        panel.title                   = "Choose output folder"
+        panel.prompt                  = "Select"
+        if let current = outputDirectory ?? selectedFileURL?.deletingLastPathComponent() {
+            panel.directoryURL = current
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        outputDirectory = url
+    }
+
     private func openFilePicker() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -420,11 +474,12 @@ struct ContentView: View {
 
         let format    = formatBinding.wrappedValue
         let outputURL = OutputFileNamer.makeURL(
-            input:      inputURL,
-            audioIndex: track.audioIndex,
-            language:   track.language,
-            codecName:  track.codecName,
-            format:     format
+            input:           inputURL,
+            outputDirectory: outputDirectory,
+            audioIndex:      track.audioIndex,
+            language:        track.language,
+            codecName:       track.codecName,
+            format:          format
         )
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
