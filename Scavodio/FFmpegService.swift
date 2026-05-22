@@ -183,7 +183,7 @@ final class FFmpegService: ObservableObject {
             arguments: [
                 "-v", "error",
                 "-select_streams", "a",
-                "-show_entries", "stream=index,codec_name,bit_rate:stream_tags=language,title",
+                "-show_entries", "stream=index,codec_name,bit_rate,duration:stream_tags=language,title",
                 "-of", "json",
                 url.path,
             ],
@@ -212,13 +212,16 @@ final class FFmpegService: ObservableObject {
 
         var tracks: [AudioTrack] = []
         for (audioIndex, stream) in streams.enumerated() {
+            let durStr = stream["duration"] as? String
+            let duration: TimeInterval? = durStr.flatMap(Double.init).flatMap { $0 > 0 ? $0 : nil }
             tracks.append(AudioTrack(
                 streamIndex: stream["index"] as? Int ?? audioIndex,
                 audioIndex:  audioIndex,
                 codecName:   stream["codec_name"] as? String ?? "unknown",
                 language:    (stream["tags"] as? [String: String])?["language"],
                 bitRate:     stream["bit_rate"] as? String,
-                title:       (stream["tags"] as? [String: String])?["title"]
+                title:       (stream["tags"] as? [String: String])?["title"],
+                duration:    duration
             ))
         }
 
@@ -310,5 +313,148 @@ final class FFmpegService: ObservableObject {
     func cancelExtraction() {
         currentProcess?.terminate()
         // currentProcess will be cleared by terminationHandler
+    }
+
+    // MARK: - Split extraction (async, non-blocking)
+
+    /// Extracts an audio track split into multiple parts of `partDuration` seconds each.
+    ///
+    /// Runs ffmpeg sequentially for every part; calls `partProgress` before each part starts.
+    /// Must be called on the **main thread**.
+    func extractAudioParts(
+        from inputURL:   URL,
+        track:           AudioTrack,
+        format:          ExportFormat,
+        partDuration:    TimeInterval,          // seconds per part
+        baseOutputURL:   URL,                   // part suffixes are added automatically
+        logHandler:      @escaping (String) -> Void,
+        partProgress:    @escaping (Int, Int) -> Void,  // (currentPart, totalParts)
+        completion:      @escaping (Result<[URL], Error>) -> Void
+    ) {
+        guard let ffmpegPath = ffmpegPath else {
+            completion(.failure(FFmpegError.binaryNotFound("ffmpeg")))
+            return
+        }
+
+        let totalDuration = track.duration ?? partDuration
+        let partCount     = max(1, Int(ceil(totalDuration / partDuration)))
+
+        // Build output URLs: strip extension, add _part01.ext etc.
+        let dir  = baseOutputURL.deletingLastPathComponent()
+        let ext  = baseOutputURL.pathExtension
+        let stem = baseOutputURL.deletingPathExtension().lastPathComponent
+
+        let outputURLs: [URL] = (0..<partCount).map { i in
+            let suffix = String(format: "_part%02d", i + 1)
+            return dir.appendingPathComponent("\(stem)\(suffix).\(ext)")
+        }
+
+        // Run parts sequentially
+        runPart(
+            index:      0,
+            total:      partCount,
+            inputURL:   inputURL,
+            track:      track,
+            format:     format,
+            partDuration: partDuration,
+            outputURLs: outputURLs,
+            ffmpegPath: ffmpegPath,
+            logHandler: logHandler,
+            partProgress: partProgress,
+            accumulated: [],
+            completion:  completion
+        )
+    }
+
+    private func runPart(
+        index:        Int,
+        total:        Int,
+        inputURL:     URL,
+        track:        AudioTrack,
+        format:       ExportFormat,
+        partDuration: TimeInterval,
+        outputURLs:   [URL],
+        ffmpegPath:   String,
+        logHandler:   @escaping (String) -> Void,
+        partProgress: @escaping (Int, Int) -> Void,
+        accumulated:  [URL],
+        completion:   @escaping (Result<[URL], Error>) -> Void
+    ) {
+        guard index < total else {
+            completion(.success(accumulated))
+            return
+        }
+
+        partProgress(index + 1, total)
+
+        let startSec = Double(index) * partDuration
+        let outputURL = outputURLs[index]
+
+        var args: [String] = [
+            "-y",
+            "-i", inputURL.path,
+            "-map", "0:a:\(track.audioIndex)",
+            "-ss", String(format: "%.3f", startSec),
+            "-t",  String(format: "%.3f", partDuration),
+        ]
+        switch format {
+        case .mp3:  args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2",    "-threads", "0"]
+        case .mka:  args += ["-c", "copy"]
+        case .aac:  args += ["-vn", "-c:a", "aac",        "-b:a", "192k", "-threads", "0"]
+        case .m4a:
+            args += track.codecName.lowercased() == "aac"
+                ? ["-vn", "-c", "copy"]
+                : ["-vn", "-c:a", "aac", "-b:a", "192k", "-threads", "0"]
+        case .ogg:  args += ["-vn", "-c:a", "libvorbis", "-q:a", "5",    "-threads", "0"]
+        case .flac: args += ["-vn", "-c:a", "flac",                       "-threads", "0"]
+        case .opus: args += ["-vn", "-c:a", "libopus",   "-b:a", "128k", "-threads", "0"]
+        }
+        args.append(outputURL.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments     = args
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { logHandler(text) }
+        }
+
+        process.terminationHandler = { [weak self] proc in
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self?.currentProcess = nil
+                if proc.terminationReason == .uncaughtSignal {
+                    completion(.failure(FFmpegError.extractionCancelled))
+                } else if proc.terminationStatus != 0 {
+                    completion(.failure(FFmpegError.extractionFailed("Part \(index+1) exit code \(proc.terminationStatus)")))
+                } else {
+                    self?.runPart(
+                        index:        index + 1,
+                        total:        total,
+                        inputURL:     inputURL,
+                        track:        track,
+                        format:       format,
+                        partDuration: partDuration,
+                        outputURLs:   outputURLs,
+                        ffmpegPath:   ffmpegPath,
+                        logHandler:   logHandler,
+                        partProgress: partProgress,
+                        accumulated:  accumulated + [outputURL],
+                        completion:   completion
+                    )
+                }
+            }
+        }
+
+        do {
+            try process.run()
+            currentProcess = process
+        } catch {
+            completion(.failure(FFmpegError.processLaunchFailed(error.localizedDescription)))
+        }
     }
 }

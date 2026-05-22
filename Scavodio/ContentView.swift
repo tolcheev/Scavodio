@@ -60,6 +60,8 @@ struct ContentView: View {
     @State private var isDropTargeted:   Bool = false
     @State private var isInstallingBrew: Bool = false
     @State private var progressInfo:     String = ""  // "5:23 at 18.8×"
+    @State private var splitEnabled:     Bool = false
+    @State private var splitMinutes:     Int  = 60
 
     // MARK: Derived
 
@@ -181,6 +183,13 @@ struct ContentView: View {
 
     // MARK: - Controls
 
+    /// How many parts would be created given the selected track and split settings.
+    private var splitPartCount: Int? {
+        guard splitEnabled, splitMinutes > 0,
+              let dur = selectedTrack?.duration, dur > 0 else { return nil }
+        return max(1, Int(ceil(dur / Double(splitMinutes * 60))))
+    }
+
     private var controlsSection: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
@@ -190,6 +199,26 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu).frame(minWidth: 120).labelsHidden()
             }
+
+            Divider().frame(height: 36)
+
+            // Split controls
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Split").font(.subheadline).foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Toggle("", isOn: $splitEnabled).labelsHidden()
+                    TextField("", value: $splitMinutes, format: .number)
+                        .frame(width: 42)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!splitEnabled)
+                    Text("min").foregroundColor(splitEnabled ? .primary : .secondary)
+                    if let n = splitPartCount {
+                        Text("→ \(n) \(n == 1 ? "part" : "parts")")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+
             Spacer()
 
             // Cancel button — visible only while extracting
@@ -234,7 +263,12 @@ struct ContentView: View {
             Spacer()
             if case .success(let url) = appStatus {
                 Button("Show in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                    // url may be a file (single) or folder (split) — both work
+                    if url.hasDirectoryPath {
+                        NSWorkspace.shared.open(url)
+                    } else {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
                 }
                 .buttonStyle(.bordered)
             }
@@ -387,6 +421,43 @@ struct ContentView: View {
         progressInfo = ""
         appStatus    = .extracting
 
+        // ── Split mode ──────────────────────────────────────────────────────
+        if splitEnabled, splitMinutes > 0, let n = splitPartCount, n > 1 {
+            let partDur = Double(splitMinutes * 60)
+            appStatus = .extracting   // will be updated per-part via progressInfo
+
+            service.extractAudioParts(
+                from:         inputURL,
+                track:        track,
+                format:       format,
+                partDuration: partDur,
+                baseOutputURL: outputURL,
+                logHandler: { [self] line in
+                    logText += line
+                    if let p = parseFFmpegProgress(line) { progressInfo = p }
+                },
+                partProgress: { [self] current, total in
+                    progressInfo = "Part \(current) of \(total)\u{2026}"
+                },
+                completion: { [self] result in
+                    progressInfo = ""
+                    switch result {
+                    case .success(let urls):
+                        // Show the folder in Finder (all parts land next to the source)
+                        let folder = urls.first?.deletingLastPathComponent() ?? inputURL.deletingLastPathComponent()
+                        appStatus = .success(folder)
+                    case .failure(FFmpegError.extractionCancelled):
+                        appStatus = .ready
+                    case .failure(let error):
+                        showLog   = true
+                        appStatus = .failed(makeUserFriendlyError(error, log: logText))
+                    }
+                }
+            )
+            return
+        }
+
+        // ── Normal single-file extraction ───────────────────────────────────
         service.extractAudio(
             from:      inputURL,
             track:     track,
@@ -404,7 +475,6 @@ struct ContentView: View {
                 case .failure(FFmpegError.extractionCancelled):
                     break
                 case .failure(let error):
-                    // Auto-expand log so user sees what went wrong
                     showLog = true
                     appStatus = .failed(makeUserFriendlyError(error, log: logText))
                 }
