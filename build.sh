@@ -78,11 +78,7 @@ fi
 
 # ── 5. Ad-hoc codesign (Hardened Runtime) ─────────────────────────────────
 echo "► Signing…"
-codesign \
-  --sign - \
-  --options runtime \
-  --entitlements "$ROOT/Scavodio/Scavodio.entitlements" \
-  "$APP"
+codesign --sign - --deep "$APP"
 
 echo ""
 echo "✓  Built:  $APP"
