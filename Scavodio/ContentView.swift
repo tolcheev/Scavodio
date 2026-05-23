@@ -244,50 +244,37 @@ struct ContentView: View {
             }
 
             Spacer()
-
-            // Cancel button — visible only while extracting
-            if isExtracting {
-                Button(role: .destructive) {
-                    service.cancelExtraction()
-                    appStatus = .ready
-                    logText  += "\n[Cancelled]\n"
-                } label: {
-                    Label("Cancel", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-            }
-
-            Button { startExtraction() } label: {
-                Label("Extract Audio", systemImage: "waveform.badge.plus")
-            }
-            .buttonStyle(.borderedProminent).controlSize(.large)
-            .disabled(isExtracting || service.isMissing)
-            .keyboardShortcut("r", modifiers: .command)
         }
     }
 
-    // MARK: - Output directory row
+    // MARK: - Output directory row (also contains Extract Audio / Cancel)
 
     private var outputDirectoryRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "folder").foregroundColor(.secondary)
             Text("Save to:").font(.subheadline).foregroundColor(.secondary)
 
+            // Choose button — LEFT, immediately after label
+            Button("Choose\u{2026}") { chooseOutputDirectory() }
+                .buttonStyle(.bordered)
+
+            // Path — expands to fill available space
             if let dir = outputDirectory {
-                Text(dir.path)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundColor(.primary)
-                Button {
-                    outputDirectory = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                HStack(spacing: 4) {
+                    Text(dir.path)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundColor(.primary)
+                    Button {
+                        outputDirectory = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Reset to same folder as source video")
                 }
-                .buttonStyle(.plain)
-                .help("Reset to same folder as source video")
             } else {
                 Text(selectedFileURL?.deletingLastPathComponent().path ?? "Same folder as video")
                     .font(.subheadline)
@@ -298,8 +285,25 @@ struct ContentView: View {
 
             Spacer()
 
-            Button("Choose\u{2026}") { chooseOutputDirectory() }
+            // Cancel / Extract Audio — RIGHT, where Choose used to be
+            if isExtracting {
+                Button(role: .destructive) {
+                    service.cancelExtraction()
+                    appStatus = .ready
+                    logText  += "\n[Cancelled]\n"
+                } label: {
+                    Label("Cancel", systemImage: "stop.fill")
+                }
                 .buttonStyle(.bordered)
+                .controlSize(.large)
+            } else {
+                Button { startExtraction() } label: {
+                    Label("Extract Audio", systemImage: "waveform.badge.plus")
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(service.isMissing)
+                .keyboardShortcut("r", modifiers: .command)
+            }
         }
     }
 
