@@ -4,6 +4,8 @@
 
 **Extract audio from any video file. One click.**
 
+[🇷🇺 Читать на русском](README.ru.md)
+
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5-orange?logo=swift&logoColor=white)](https://swift.org)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-blueviolet)](https://developer.apple.com/documentation/apple-silicon)
@@ -25,12 +27,13 @@ Scavodio is a lightweight native macOS app that extracts audio tracks from video
 ## Features
 
 - **Drag & drop** any video file onto the window, or use the file picker
-- **Auto-detects all audio tracks** via ffprobe — shows codec, language, bitrate, and title
+- **Auto-detects all audio tracks** via ffprobe — shows codec, language, bitrate, and duration
 - **7 export formats:** MP3 · MKA · AAC · M4A · OGG · FLAC · Opus
-- **One-click ffmpeg install** if it's missing (via Homebrew, with confirmation)
+- **Split into parts** — cut long audio into chunks of 30 min · 1h · 2h · 3h · 4h · 6h. Preview shows the exact breakdown: `→ 3 parts: 3h + 3h + 1h`
+- **Choose output folder** — save anywhere, not just next to the source file
+- **One-click ffmpeg install** via Homebrew, with confirmation
 - **Cancel** any extraction mid-way
 - **Live log** — see exactly what ffmpeg is doing
-- **Show in Finder** after extraction completes
 - **⌘R** keyboard shortcut to start extraction
 - No Electron. No Python. No subscriptions. Just Swift.
 
@@ -40,7 +43,7 @@ Scavodio is a lightweight native macOS app that extracts audio tracks from video
 
 | Video input | Audio output |
 |---|---|
-| MKV · MP4 · MOV · AVI · WebM · M4V | **MP3** · MKA (copy) · AAC · M4A · OGG · FLAC · Opus |
+| MKV · MP4 · MOV · AVI · WebM · M4V | **MP3** · MKA · AAC · M4A · OGG · FLAC · Opus |
 | MTS · M2TS · TS · FLV · WMV · VOB · 3GP | |
 
 ---
@@ -49,17 +52,10 @@ Scavodio is a lightweight native macOS app that extracts audio tracks from video
 
 ### Option A — Download DMG (recommended)
 
-1. Go to [**Releases**](https://github.com/tolcheev/Scavodio/releases/latest)
-2. Download the DMG, open it, drag **Scavodio** to Applications
-3. On first launch run once in Terminal:
-
-```bash
-xattr -cr /Applications/Scavodio.app
-```
-
-> This removes the macOS quarantine flag that Gatekeeper sets on internet downloads.
-> Without it, macOS shows a "damaged" error for ad-hoc signed apps.
-> You only need to do this once.
+1. Download from [**Releases**](https://github.com/tolcheev/Scavodio/releases/latest) and open the DMG
+2. Drag **Scavodio** to **Applications**
+3. Open the DMG's **"Open Privacy Settings"** shortcut, or go to:  
+   **System Settings → Privacy & Security → Open Anyway**
 
 Then install ffmpeg if you don't have it:
 
@@ -67,53 +63,43 @@ Then install ffmpeg if you don't have it:
 brew install ffmpeg
 ```
 
-Or just click **Install ffmpeg** inside the app — it will do it for you.
+Or click **Install ffmpeg** inside the app.
+
+> **Why the extra step?** Scavodio is ad-hoc signed, not notarized. macOS 13+ requires a one-time approval in System Settings for apps distributed outside the App Store. You only do this once.
 
 ### Option B — Build from source
 
 **Requirements:** macOS 13+, Apple Silicon, Xcode Command Line Tools
 
 ```bash
-# Install Command Line Tools if needed
-xcode-select --install
+xcode-select --install   # if not already installed
 
 git clone https://github.com/tolcheev/Scavodio.git
 cd Scavodio
 
-# Build
-./build.sh
-
-# Build + install to /Applications (also removes quarantine flag)
-./build.sh install
+./build.sh           # build to build/Scavodio.app
+./build.sh install   # build + install to /Applications
 ```
 
-That's it. The script compiles with `swiftc`, writes a correct `Info.plist`, copies the icon, and ad-hoc signs the bundle. No Xcode required.
-
-To open in Xcode instead:
-
-```bash
-open Scavodio.xcodeproj
-```
+The script compiles with `swiftc`, writes a correct `Info.plist`, copies the icon, and ad-hoc signs the bundle. No Xcode IDE required.
 
 ---
 
 ## How it works
 
 ```
-┌─────────────────────────────────────┐
-│  Drop video / Choose file           │
-│         ↓                           │
-│  ffprobe → detect audio tracks      │
-│         ↓                           │
-│  Pick track + format                │
-│         ↓                           │
-│  ffmpeg → extract audio             │
-│         ↓                           │
-│  Output file next to source         │
-└─────────────────────────────────────┘
+Drop video / Choose file
+        ↓
+ffprobe → detect audio tracks (codec, language, bitrate, duration)
+        ↓
+Pick track + format + output folder
+        ↓
+ffmpeg → extract audio  [optionally split into parts]
+        ↓
+Output file(s) in chosen folder
 ```
 
-ffmpeg and ffprobe are called as subprocesses via `Process.arguments[]` — never as shell strings, so **filenames with spaces, Unicode, and Cyrillic characters work fine**.
+Subprocess arguments are passed as arrays, never concatenated shell strings — **filenames with spaces, Unicode, and Cyrillic characters work fine**.
 
 ---
 
@@ -122,23 +108,25 @@ ffmpeg and ffprobe are called as subprocesses via `Process.arguments[]` — neve
 ```
 Scavodio/
 ├── ScavodioApp.swift        — @main entry point
-├── ContentView.swift        — UI, drag & drop, file picker, error messages
-├── AudioTrack.swift         — model
+├── ContentView.swift        — UI, drag & drop, error messages
+├── AudioTrack.swift         — model (codec, language, bitrate, duration)
 ├── SupportedFormats.swift   — accepted video formats + UTType helpers
-├── FFmpegService.swift      — ffprobe probe · ffmpeg extract · brew install
-├── ProcessRunner.swift      — subprocess with 30s timeout (no infinite hangs)
+├── FFmpegService.swift      — ffprobe probe · ffmpeg extract · split · brew install
+├── ProcessRunner.swift      — subprocess with 30s timeout
 ├── OutputFileNamer.swift    — safe filename builder, HFS+ compliant
+├── SplitDuration.swift      — split chunk-size presets
 ├── AppIcon.icns             — app icon (included for source builds)
-├── Info.plist               — bundle metadata template
+├── Info.plist
 └── Scavodio.entitlements
 
 ScavodioTests/
-├── ProcessRunnerTests.swift     — timeout, args, launch failure
-├── OutputFileNamerTests.swift   — path traversal, null bytes, 255-byte limit
-├── FFmpegServiceTests.swift     — binary detection, JSON parsing, cancel, security
-└── SizeBudgetTests.swift        — binary/bundle size regression tests
+├── ProcessRunnerTests.swift
+├── OutputFileNamerTests.swift
+├── FFmpegServiceTests.swift
+└── SizeBudgetTests.swift
 
 build.sh                     — one-command build script (no Xcode needed)
+dmg_background.swift         — DMG background image generator
 ```
 
 ---
@@ -150,7 +138,7 @@ build.sh                     — one-command build script (no Xcode needed)
 | macOS | 13.0 Ventura or later |
 | Architecture | Apple Silicon (arm64) |
 | ffmpeg | via Homebrew (`brew install ffmpeg`) |
-| Xcode | Command Line Tools only (`xcode-select --install`) |
+| To build | Xcode Command Line Tools (`xcode-select --install`) |
 
 ---
 
@@ -158,9 +146,8 @@ build.sh                     — one-command build script (no Xcode needed)
 
 - No network access — everything runs locally
 - No app sandbox (required to launch ffmpeg as subprocess)
-- Ad-hoc signed — remove quarantine with `xattr -cr` on first install (see above)
 - Hardened Runtime enabled
-- Subprocess arguments are passed as arrays, never concatenated shell strings
+- Subprocess arguments are arrays — no shell injection possible
 
 ---
 
@@ -171,10 +158,10 @@ Pull requests are welcome. For major changes, open an issue first.
 ```bash
 git clone https://github.com/tolcheev/Scavodio.git
 cd Scavodio
-open Scavodio.xcodeproj   # or build with ./build.sh
+open Scavodio.xcodeproj   # or: ./build.sh
 ```
 
-Run tests: `⌘U` in Xcode.
+Run tests: **⌘U** in Xcode.
 
 ---
 
